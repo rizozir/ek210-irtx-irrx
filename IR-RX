@@ -1,0 +1,131 @@
+// ========= IR RX (text + 10 presets) — auto-lock on STX, NEC/NEC2, ignore repeats =========
+#include <IRremote.h>
+#include <Wire.h>
+#include <hd44780.h>
+#include <hd44780ioClass/hd44780_I2Cexp.h>
+
+
+hd44780_I2Cexp lcd;                 // auto-detect LCD
+
+
+// ----- Pins / framing -----
+const uint8_t RECV_PIN      = 3;    // IR receiver OUT -> D3
+const uint8_t IR_TEXT_START = 0xF0; // STX used by your TX
+const uint8_t IR_TEXT_END   = 0xFF; // ETX used by your TX
+
+
+// ----- Presets (0x10..0x19) -----
+const uint8_t PRESET_MIN = 0x10;
+const uint8_t PRESET_MAX = 0x19;
+const char* PRESET_TEXT[10] = {
+  "HELLO WORLD",
+  "TEST MESSAGE",
+  "IR LINK OK",
+  "GOOD MORNING",
+  "GOOD NIGHT",
+  "MESSAGE FIVE",
+  "MESSAGE SIX",
+  "MESSAGE SEVEN",
+  "MESSAGE EIGHT",
+  "MESSAGE NINE"
+};
+
+
+// ----- Text buffer / state -----
+const uint16_t FRAME_TIMEOUT_MS = 600; // finalize if idle mid-frame
+const uint16_t BUF_MAX          = 128;
+char     rxBuf[BUF_MAX + 1];
+uint16_t rxLen = 0;
+
+
+bool     inFrame       = false;
+uint16_t lockedAddress = 0xFFFF;    // set when STX arrives
+uint32_t lastByteMs    = 0;
+
+
+inline bool isNECish(decode_type_t p){ return (p == NEC) || (p == NEC2); }
+
+
+// LCD helpers (tail on 16-char line)
+void lcdLine(uint8_t r, const String& s){
+  String out = s;
+  if (out.length() > 16) out = out.substring(out.length() - 16);
+  while (out.length() < 16) out += ' ';
+  lcd.setCursor(0, r);
+  lcd.print(out);
+}
+
+
+void resetBuffer(){ rxLen = 0; rxBuf[0] = '\0'; }
+void appendByte(uint8_t b){
+  if (rxLen < BUF_MAX){ rxBuf[rxLen++] = (char)b; rxBuf[rxLen] = '\0'; }
+}
+void showPreset(uint8_t idx){ lcdLine(0, "PRESET MESSAGE"); lcdLine(1, PRESET_TEXT[idx]); }
+void finishFrame(){ inFrame = false; lcdLine(0, "TEXT RECEIVED:"); lcdLine(1, String(rxBuf)); }
+
+
+void setup(){
+  IrReceiver.begin(RECV_PIN, ENABLE_LED_FEEDBACK);
+  lcd.begin(16,2);
+  lcd.backlight();
+  lcd.clear();
+  lcdLine(0, "IR Receiver Ready");
+  lcdLine(1, "Waiting...");
+}
+
+
+void loop(){
+  // Timeout finalize if ETX missed
+  if (inFrame && (millis() - lastByteMs > FRAME_TIMEOUT_MS)) finishFrame();
+
+
+  if (!IrReceiver.decode()) return;
+  auto &d = IrReceiver.decodedIRData;
+
+
+  if (isNECish(d.protocol)){
+    // Ignore repeat frames (no new command)
+    if (d.flags & IRDATA_FLAGS_IS_REPEAT) { IrReceiver.resume(); return; }
+
+
+    uint16_t addr = d.address;
+    uint8_t  cmd  = d.command;
+
+
+    if (!inFrame){
+      // IDLE: either start text on STX, or handle presets immediately
+      if (cmd == IR_TEXT_START){
+        inFrame       = true;
+        lockedAddress = addr;       // auto-lock to this sender
+        resetBuffer();
+        lastByteMs = millis();
+        lcdLine(0, "Receiving TEXT...");
+        lcdLine(1, "");
+      } else if (cmd >= PRESET_MIN && cmd <= PRESET_MAX){
+        uint8_t idx = cmd - PRESET_MIN; // 0..9
+        showPreset(idx);
+      } else {
+        // ignore other idle commands (prevents "Unknown" spam)
+      }
+    } else {
+      // IN FRAME: accept only bytes from the locked address
+      if (addr != lockedAddress) { IrReceiver.resume(); return; }
+
+
+      lastByteMs = millis();
+
+
+      if (cmd == IR_TEXT_END){
+        finishFrame();
+      } else {
+        appendByte(cmd);          // take as ASCII byte
+        lcdLine(1, String(rxBuf)); // live tail preview
+      }
+    }
+  }
+
+
+  IrReceiver.resume();
+}
+
+
