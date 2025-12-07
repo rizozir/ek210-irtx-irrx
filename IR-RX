@@ -4,15 +4,12 @@
 #include <hd44780.h>
 #include <hd44780ioClass/hd44780_I2Cexp.h>
 
-
 hd44780_I2Cexp lcd;                 // auto-detect LCD
-
 
 // ----- Pins / framing -----
 const uint8_t RECV_PIN      = 3;    // IR receiver OUT -> D3
 const uint8_t IR_TEXT_START = 0xF0; // STX used by your TX
 const uint8_t IR_TEXT_END   = 0xFF; // ETX used by your TX
-
 
 // ----- Presets (0x10..0x19) -----
 const uint8_t PRESET_MIN = 0x10;
@@ -22,21 +19,31 @@ const char* PRESET_TEXT[10] = {
   "HELP","YES","NO","GET TO WORK :)","LEAVING"
 };
 
-
 // ----- Text buffer / state -----
 const uint16_t FRAME_TIMEOUT_MS = 600; // finalize if idle mid-frame
 const uint16_t BUF_MAX          = 128;
 char     rxBuf[BUF_MAX + 1];
 uint16_t rxLen = 0;
 
-
 bool     inFrame       = false;
 uint16_t lockedAddress = 0xFFFF;    // set when STX arrives
 uint32_t lastByteMs    = 0;
 
+// ==== NEW: display mode + waiting "..." animation ====
+enum DisplayMode {
+  MODE_IDLE,
+  MODE_PRESET,
+  MODE_TEXT_RX,
+  MODE_TEXT_DONE
+};
+
+DisplayMode displayMode = MODE_IDLE;
+
+// animation state
+uint32_t lastWaitAnimMs = 0;
+uint8_t  waitDots       = 0;   // 0..3
 
 inline bool isNECish(decode_type_t p){ return (p == NEC) || (p == NEC2); }
-
 
 // LCD helpers (tail on 16-char line)
 void lcdLine(uint8_t r, const String& s){
@@ -47,42 +54,81 @@ void lcdLine(uint8_t r, const String& s){
   lcd.print(out);
 }
 
-
 void resetBuffer(){ rxLen = 0; rxBuf[0] = '\0'; }
-void appendByte(uint8_t b){
-  if (rxLen < BUF_MAX){ rxBuf[rxLen++] = (char)b; rxBuf[rxLen] = '\0'; }
-}
-void showPreset(uint8_t idx){ lcdLine(0, "PRESET MESSAGE"); lcdLine(1, PRESET_TEXT[idx]); }
-void finishFrame(){ inFrame = false; lcdLine(0, "TEXT RECEIVED:"); lcdLine(1, String(rxBuf)); }
 
+void appendByte(uint8_t b){
+  if (rxLen < BUF_MAX){
+    rxBuf[rxLen++] = (char)b;
+    rxBuf[rxLen] = '\0';
+  }
+}
+
+void showPreset(uint8_t idx){
+  displayMode = MODE_PRESET;
+  lcdLine(0, "PRESET MESSAGE");
+  lcdLine(1, PRESET_TEXT[idx]);
+}
+
+void finishFrame(){
+  inFrame = false;
+  displayMode = MODE_TEXT_DONE;
+  lcdLine(0, "TEXT RECEIVED:");
+  lcdLine(1, String(rxBuf));
+}
+
+// NEW: update the "Waiting..." animation when idle
+void updateWaitingAnimation(){
+  if (displayMode != MODE_IDLE) return;  // only animate on idle screen
+
+  uint32_t now = millis();
+  const uint16_t ANIM_PERIOD_MS = 400;   // speed of dot animation
+
+  if (now - lastWaitAnimMs >= ANIM_PERIOD_MS){
+    lastWaitAnimMs = now;
+
+    // cycle 0,1,2,3 dots
+    waitDots = (waitDots + 1) % 4;
+
+    String line = "Waiting";
+    for (uint8_t i = 0; i < waitDots; i++) line += '.';
+
+    lcdLine(1, line);
+  }
+}
 
 void setup(){
   IrReceiver.begin(RECV_PIN, ENABLE_LED_FEEDBACK);
   lcd.begin(16,2);
   lcd.backlight();
   lcd.clear();
-  lcdLine(0, "IR Receiver Ready");
-  lcdLine(1, "Waiting...");
+
+  displayMode = MODE_IDLE;
+  lcdLine(0, "Receiver Ready!");
+  lcdLine(1, "Waiting");   // animation will start adding dots
 }
 
-
 void loop(){
-  // Timeout finalize if ETX missed
-  if (inFrame && (millis() - lastByteMs > FRAME_TIMEOUT_MS)) finishFrame();
+  // 1) Always update the waiting animation (if we're in idle mode)
+  updateWaitingAnimation();
 
+  // 2) Timeout finalize if ETX missed
+  if (inFrame && (millis() - lastByteMs > FRAME_TIMEOUT_MS)){
+    finishFrame();
+  }
 
+  // 3) IR handling (no early return anymore)
   if (!IrReceiver.decode()) return;
   auto &d = IrReceiver.decodedIRData;
 
-
   if (isNECish(d.protocol)){
     // Ignore repeat frames (no new command)
-    if (d.flags & IRDATA_FLAGS_IS_REPEAT) { IrReceiver.resume(); return; }
-
+    if (d.flags & IRDATA_FLAGS_IS_REPEAT) {
+      IrReceiver.resume();
+      return;
+    }
 
     uint16_t addr = d.address;
     uint8_t  cmd  = d.command;
-
 
     if (!inFrame){
       // IDLE: either start text on STX, or handle presets immediately
@@ -90,7 +136,8 @@ void loop(){
         inFrame       = true;
         lockedAddress = addr;       // auto-lock to this sender
         resetBuffer();
-        lastByteMs = millis();
+        lastByteMs    = millis();
+        displayMode   = MODE_TEXT_RX;
         lcdLine(0, "Receiving TEXT...");
         lcdLine(1, "");
       } else if (cmd >= PRESET_MIN && cmd <= PRESET_MAX){
@@ -101,23 +148,21 @@ void loop(){
       }
     } else {
       // IN FRAME: accept only bytes from the locked address
-      if (addr != lockedAddress) { IrReceiver.resume(); return; }
-
+      if (addr != lockedAddress) {
+        IrReceiver.resume();
+        return;
+      }
 
       lastByteMs = millis();
-
 
       if (cmd == IR_TEXT_END){
         finishFrame();
       } else {
-        appendByte(cmd);          // take as ASCII byte
-        lcdLine(1, String(rxBuf)); // live tail preview
+        appendByte(cmd);             // take as ASCII byte
+        lcdLine(1, String(rxBuf));   // live tail preview
       }
     }
   }
 
-
   IrReceiver.resume();
 }
-
-
