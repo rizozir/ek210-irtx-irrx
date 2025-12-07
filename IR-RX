@@ -18,16 +18,8 @@ const uint8_t IR_TEXT_END   = 0xFF; // ETX used by your TX
 const uint8_t PRESET_MIN = 0x10;
 const uint8_t PRESET_MAX = 0x19;
 const char* PRESET_TEXT[10] = {
-  "HELLO WORLD",
-  "TEST MESSAGE",
-  "IR LINK OK",
-  "GOOD MORNING",
-  "GOOD NIGHT",
-  "MESSAGE FIVE",
-  "MESSAGE SIX",
-  "MESSAGE SEVEN",
-  "MESSAGE EIGHT",
-  "MESSAGE NINE"
+  "DONE","WORKING ON IT","NEED HELP?","BREAK?","NOT WORKING",
+  "HELP","YES","NO","GET TO WORK :)","LEAVING"
 };
 
 
