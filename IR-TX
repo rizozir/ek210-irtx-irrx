@@ -21,8 +21,8 @@ const uint16_t INTER_CHAR_MS = 120;    // safe gap; avoids repeat-only
 // ======== Presets (10 total) 0x10..0x19 ========
 const uint8_t presetCmds[10] = {0x10,0x11,0x12,0x13,0x14,0x15,0x16,0x17,0x18,0x19};
 const char*   PRESET_TEXT[10] = {
-  "HELLO WORLD","TEST MESSAGE","IR LINK OK","GOOD MORNING","GOOD NIGHT",
-  "MESSAGE FIVE","MESSAGE SIX","MESSAGE SEVEN","CENTER SERVO","LEFT SERVO"
+  "DONE","WORKING ON IT","NEED HELP?","BREAK?","NOT WORKING",
+  "HELP","YES","NO","GET TO WORK :)","LEAVING"
 };
 
 
@@ -177,10 +177,6 @@ void handlePreset(char k){
 
   sendNEC_byte(presetCmds[idx]);
 
-
-  // OPTIONAL: also move local servo for some presets (same as before)
-  if (idx == 8) servoSafeWrite(90);  // key '9' -> center
-  if (idx == 9) servoSafeWrite(0);   // key '0' -> left
 
 
   lcdLine(0, "Sent preset " + String(idx+1));
